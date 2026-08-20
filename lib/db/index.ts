@@ -52,7 +52,8 @@ function initializeTables() {
         takeover_window_minutes INTEGER,
         started_at INTEGER NOT NULL,
         expected_duration_minutes INTEGER,
-        created_at INTEGER NOT NULL
+        created_at INTEGER NOT NULL,
+        background_image_path TEXT
       );
 
       CREATE TABLE IF NOT EXISTS trends (
@@ -60,13 +61,41 @@ function initializeTables() {
         session_id TEXT NOT NULL,
         name TEXT NOT NULL,
         value INTEGER DEFAULT 0,
+        increment_rate INTEGER DEFAULT 0,
+        is_paused INTEGER DEFAULT 0,
         is_hidden INTEGER DEFAULT 0,
         position INTEGER NOT NULL,
+        image_path TEXT,
+        ramp_stages TEXT,
+        is_takeover_trend INTEGER DEFAULT 0,
+        color TEXT,
         FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
       );
     `);
   } catch (error) {
     console.error("Failed to create tables:", error);
+  }
+
+  // Migrate existing DBs created before these columns existed
+  addColumnIfMissing("ALTER TABLE trends ADD COLUMN increment_rate INTEGER DEFAULT 0;");
+  addColumnIfMissing("ALTER TABLE trends ADD COLUMN is_paused INTEGER DEFAULT 0;");
+  addColumnIfMissing("ALTER TABLE trends ADD COLUMN image_path TEXT;");
+  addColumnIfMissing("ALTER TABLE trends ADD COLUMN ramp_stages TEXT;");
+  addColumnIfMissing("ALTER TABLE trends ADD COLUMN is_takeover_trend INTEGER DEFAULT 0;");
+  addColumnIfMissing("ALTER TABLE trends ADD COLUMN color TEXT;");
+  addColumnIfMissing("ALTER TABLE sessions ADD COLUMN background_image_path TEXT;");
+}
+
+function addColumnIfMissing(sql: string) {
+  try {
+    sqlite!.exec(sql);
+  } catch (error: any) {
+    // SQLite's only error for a column that's already there is this exact
+    // message — anything else (locked db, corruption, ...) is real and
+    // must not be swallowed silently.
+    if (!String(error?.message).includes("duplicate column name")) {
+      console.error(`Migration failed: ${sql}`, error);
+    }
   }
 }
 

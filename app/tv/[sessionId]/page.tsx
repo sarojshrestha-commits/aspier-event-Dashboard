@@ -9,6 +9,8 @@ interface Trend {
   value: number;
   isHidden: boolean;
   position: number;
+  imagePath?: string;
+  color?: string | null;
 }
 
 interface Session {
@@ -16,6 +18,18 @@ interface Session {
   name: string;
   visibleCount: number;
   status: string;
+  startedAt: number;
+  expectedDurationMinutes: number | null;
+  backgroundImagePath?: string | null;
+}
+
+function formatClock(ms: number) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
 }
 
 function formatNumber(num: number): string {
@@ -37,6 +51,15 @@ export default function TVPage() {
   const [loading, setLoading] = useState(true);
   const [takeoverActive, setTakeoverActive] = useState(false);
   const [takeoverTrendId, setTakeoverTrendId] = useState<string | null>(null);
+  // null until mounted so server and client markup match
+  const [now, setNow] = useState<Date | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
+  useEffect(() => {
+    setNow(new Date());
+    const timer = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     loadSessionData();
@@ -53,28 +76,69 @@ export default function TVPage() {
           t.id === data.trendId ? { ...t, value: data.value } : t
         )
       );
+      setLastUpdated(new Date());
     });
 
     eventSource.addEventListener("takeoverTriggered", (event) => {
-      // During takeover, only show the hidden trend
+      // During takeover, show the takeover trend data from the broadcast
       const data = JSON.parse(event.data);
       setTakeoverActive(true);
-      // Find the hidden trend
-      setTrends((prev) => {
-        const hiddenTrend = prev.find((t) => t.isHidden);
-        if (hiddenTrend) {
-          setTakeoverTrendId(hiddenTrend.id);
-          return [hiddenTrend];
-        }
-        return prev;
-      });
 
-      // Auto-end takeover after 30 seconds
-      setTimeout(() => {
-        setTakeoverActive(false);
-        setTakeoverTrendId(null);
-        loadSessionData();
-      }, 30000);
+      // Use the trend data directly from the broadcast if available.
+      // Stays showing until the admin explicitly reveals or hides it again
+      // — no auto-revert timer. Per spec, that decision is the admin's,
+      // not automatic.
+      if (data.trendId) {
+        setTakeoverTrendId(data.trendId);
+        const takeoverTrend: Trend = {
+          id: data.trendId,
+          name: data.trendName,
+          value: data.trendValue,
+          isHidden: true,
+          position: 0,
+          imagePath: data.imagePath ?? undefined,
+          color: data.color ?? undefined,
+        };
+        setTrends([takeoverTrend]);
+      } else {
+        // Fallback: try to find hidden trend (for backward compatibility)
+        setTrends((prev) => {
+          const hiddenTrend = prev.find((t) => t.isHidden);
+          if (hiddenTrend) {
+            setTakeoverTrendId(hiddenTrend.id);
+            return [hiddenTrend];
+          }
+          return prev;
+        });
+      }
+    });
+
+    eventSource.addEventListener("trendCreated", () => {
+      loadSessionData();
+    });
+
+    eventSource.addEventListener("trendConfigUpdated", () => {
+      loadSessionData();
+    });
+
+    eventSource.addEventListener("trendHidden", () => {
+      loadSessionData();
+    });
+
+    eventSource.addEventListener("trendRevealed", () => {
+      loadSessionData();
+    });
+
+    eventSource.addEventListener("trendDeleted", () => {
+      loadSessionData();
+    });
+
+    eventSource.addEventListener("sessionStarted", () => {
+      loadSessionData();
+    });
+
+    eventSource.addEventListener("sessionStopped", () => {
+      loadSessionData();
     });
 
     eventSource.addEventListener("sessionReset", () => {
@@ -85,11 +149,22 @@ export default function TVPage() {
       loadSessionData();
     });
 
+    eventSource.addEventListener("backgroundUpdated", () => {
+      loadSessionData();
+    });
+
     return () => eventSource.close();
   }, [sessionId]);
 
   async function loadSessionData() {
     try {
+      // Any real data refresh means we're not in an active takeover moment
+      // anymore (that state only comes from the takeoverTriggered event,
+      // which never calls this) — so always drop the stale banner/lock here
+      // rather than depending on every individual event to remember to.
+      setTakeoverActive(false);
+      setTakeoverTrendId(null);
+
       const sessionResponse = await fetch(`/api/sessions/${sessionId}`);
       if (sessionResponse.ok) {
         const sessionData = await sessionResponse.json();
@@ -106,6 +181,7 @@ export default function TVPage() {
           .slice(0, session?.visibleCount || 5);
         setTrends(filtered);
       }
+      setLastUpdated(new Date());
     } catch (error) {
       console.error("Failed to load session data:", error);
     } finally {
@@ -115,85 +191,139 @@ export default function TVPage() {
 
   if (loading) {
     return (
-      <div className="w-full h-screen flex items-center justify-center bg-gradient-to-br from-blue-900 to-blue-700">
-        <p className="text-white text-2xl">Loading...</p>
+      <div className="w-full h-screen flex items-center justify-center bg-white">
+        <p className="text-neutral-400 text-xl">Loading…</p>
       </div>
     );
   }
 
   if (!session) {
     return (
-      <div className="w-full h-screen flex items-center justify-center bg-gradient-to-br from-red-900 to-red-700">
-        <p className="text-white text-2xl">Session not found</p>
+      <div className="w-full h-screen flex items-center justify-center bg-white">
+        <p className="text-neutral-400 text-xl">Session not found</p>
       </div>
     );
   }
 
   const maxValue = Math.max(...trends.map((t) => t.value), 1);
-  const colors = [
-    "bg-blue-500",
-    "bg-purple-500",
-    "bg-pink-500",
-    "bg-orange-500",
-    "bg-green-500",
-    "bg-red-500",
-    "bg-cyan-500",
-    "bg-indigo-500",
-  ];
+
+  const isRunning = session.status === "active";
+  const elapsedMs =
+    isRunning && now ? now.getTime() - session.startedAt : 0;
+  const durationMs = session.expectedDurationMinutes
+    ? session.expectedDurationMinutes * 60_000
+    : null;
+  const remainingMs = durationMs != null ? durationMs - elapsedMs : null;
 
   return (
-    <div className="w-full h-screen bg-gradient-to-br from-slate-900 to-slate-800 flex flex-col">
-      <header className="bg-black bg-opacity-50 p-6 text-white">
-        <h1 className="text-4xl font-bold">{session.name}</h1>
-        {takeoverActive && (
-          <p className="text-xl text-yellow-300 mt-2">🔥 TAKEOVER MODE 🔥</p>
-        )}
+    <div
+      className="w-full h-screen bg-white relative"
+      style={
+        session.backgroundImagePath
+          ? {
+              backgroundImage: `url(${session.backgroundImagePath})`,
+              backgroundSize: "cover",
+              backgroundPosition: "center",
+            }
+          : undefined
+      }
+    >
+      {session.backgroundImagePath && (
+        <div className="absolute inset-0 bg-white/85" />
+      )}
+      <div className="relative h-full flex flex-col">
+      <header className="px-10 py-8 border-b border-neutral-100 flex items-start justify-between gap-6">
+        <div>
+          <h1 className="text-3xl font-semibold text-neutral-900 tracking-tight">
+            {session.name}
+          </h1>
+          {takeoverActive && (
+            <p className="text-sm font-medium text-neutral-500 mt-1 uppercase tracking-widest">
+              Takeover
+            </p>
+          )}
+        </div>
+        <div className="flex flex-col items-end gap-3">
+          {(durationMs != null || isRunning) && (
+            <div className="text-right">
+              <p className="text-3xl font-semibold text-neutral-900 tracking-tight tabular-nums">
+                {remainingMs != null
+                  ? formatClock(remainingMs)
+                  : formatClock(elapsedMs)}
+              </p>
+            </div>
+          )}
+          <div className="text-right">
+            <p className="text-base font-medium text-neutral-500 tracking-tight tabular-nums">
+              {now
+                ? now.toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                  })
+                : "--:--:--"}
+            </p>
+            <p className="text-xs text-neutral-400 mt-0.5">
+              {now
+                ? now.toLocaleDateString([], {
+                    weekday: "short",
+                    day: "numeric",
+                    month: "short",
+                  })
+                : ""}
+            </p>
+          </div>
+        </div>
       </header>
 
-      <main className="flex-1 p-8 overflow-hidden flex flex-col justify-center">
-        <div className="space-y-6">
+      <main className="flex-1 px-10 overflow-hidden flex flex-col justify-center">
+        <div className="space-y-5 max-w-5xl mx-auto w-full">
           {trends.length === 0 ? (
-            <p className="text-white text-xl">No trends to display</p>
+            <p className="text-neutral-400 text-lg text-center">
+              No trends to display
+            </p>
           ) : (
             trends
               .sort((a, b) => b.value - a.value)
               .map((trend, index) => (
-                <div key={trend.id} className="space-y-2">
-                  <div className="flex justify-between items-center">
-                    <div className="flex items-center gap-4 w-1/4">
-                      <span className="text-white text-2xl font-bold w-12">
-                        #{index + 1}
-                      </span>
-                      <span className="text-white text-xl font-semibold">
-                        {trend.name}
-                      </span>
-                    </div>
-                    <div className="flex-1 mx-4">
-                      <div className="bg-slate-700 rounded-full h-12 overflow-hidden">
-                        <div
-                          className={`h-full ${
-                            colors[index % colors.length]
-                          } transition-all duration-500`}
-                          style={{
-                            width: `${(trend.value / maxValue) * 100}%`,
-                          }}
-                        />
-                      </div>
-                    </div>
-                    <span className="text-white text-2xl font-bold w-24 text-right">
-                      {formatNumber(trend.value)}
+                <div key={trend.id} className="flex items-center gap-5">
+                  <span className="text-neutral-300 text-xl font-semibold w-10 text-right tabular-nums">
+                    {index + 1}
+                  </span>
+                  <div className="flex items-center gap-2 w-48">
+                    {trend.imagePath && (
+                      <img
+                        src={trend.imagePath}
+                        alt={trend.name}
+                        className="h-8 w-8 rounded object-cover flex-shrink-0"
+                      />
+                    )}
+                    <span className="text-neutral-900 text-lg font-medium truncate">
+                      {trend.name}
                     </span>
                   </div>
+                  <div className="flex-1 bg-neutral-100 rounded-md h-10 overflow-hidden">
+                    <div
+                      className="h-full rounded-md transition-all duration-700 ease-out"
+                      style={{
+                        width: `${(trend.value / maxValue) * 100}%`,
+                        backgroundColor: trend.color || "#171717",
+                      }}
+                    />
+                  </div>
+                  <span className="text-neutral-900 text-lg font-semibold w-20 text-right tabular-nums">
+                    {formatNumber(trend.value)}
+                  </span>
                 </div>
               ))
           )}
         </div>
       </main>
 
-      <footer className="bg-black bg-opacity-50 p-4 text-center text-gray-400 text-sm">
-        Live Leaderboard • Last updated:{" "}
-        {new Date().toLocaleTimeString()}
+      <footer className="px-10 py-4 border-t border-neutral-100 text-center text-neutral-300 text-xs">
+        Live · updated {lastUpdated ? lastUpdated.toLocaleTimeString() : "—"}
       </footer>
+      </div>
     </div>
   );
 }

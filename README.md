@@ -1,36 +1,74 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Aspire Event Dashboard
 
-## Getting Started
+Live TV leaderboard for in-person events, styled as a bar-chart race. One admin
+drives all trend values by hand; a public TV display shows the live standings
+with no login required. Self-hosted single Node process, SQLite for storage,
+Server-Sent Events for realtime push.
 
-First, run the development server:
+## Stack
+
+- Next.js 16 (App Router), React 19, Tailwind v4
+- SQLite via `better-sqlite3` + Drizzle ORM (`lib/db/`)
+- SSE realtime (`lib/sse.ts`), driven by a 1s server tick loop (`lib/ticker.ts`)
+- shadcn/ui components (`components/ui/`)
+
+## Running locally
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+bun install
+bun run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Seed the admin account (defaults to `admin` / `admin123`, override with
+`ADMIN_USERNAME` / `ADMIN_PASSWORD` env vars):
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+curl http://localhost:3000/api/admin/init
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Then:
+- `/admin` — login, create/manage sessions
+- `/admin/[sessionId]` — control panel for one session
+- `/tv/[sessionId]` — public leaderboard display, no login
 
-## Learn More
+## Features
 
-To learn more about Next.js, take a look at the following resources:
+**Sessions** — each event is a session with its own unique ID/URL for admin
+and TV. Configurable duration, visible-trend count, and takeover window.
+Start/Stop controls the session clock; Reset zeroes trend values and restarts
+the clock; sessions auto-stop the instant their configured duration elapses.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+**Trends** — each trend has a name, optional image, and a value that moves
+either by:
+- a flat rate (units/min), or
+- a custom ramp curve — arbitrary `{% of session, rate}` stages, piecewise-
+  linearly interpolated over the session's elapsed time (ramp-up / steady /
+  ramp-down, or any shape you define)
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Per-trend controls: pause/play, stop (zero the rate), hide/reveal, delete,
+and a per-trend bar color on the TV display. Session-wide Start All / Stop
+All toggles every trend's ticking at once.
 
-## Deploy on Vercel
+**Takeover** — mark one trend as the takeover trend: it's auto-hidden from
+the public feed and gets an aggressive ramp preset. Trigger the takeover
+manually (button) or let it fire automatically once the configured window
+before session end arrives. The surging trend's data is pushed directly in
+the trigger broadcast — the TV never queries the hidden trend through the
+normal endpoint, so its value can't be inspected via devtools before the
+reveal. After a takeover, the trend stays surfaced until the admin explicitly
+reveals or re-hides it — never automatic.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+**TV display** — minimal white leaderboard, bar-chart-race style, optional
+full-bleed background image, live session clock + wall clock, values
+formatted like a sub-count race (999 → 1.2K → 1.2M).
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Data & uploads
+
+- `data/app.db` — SQLite database (WAL mode). Schema migrations run
+  automatically on boot via `ALTER TABLE ... ADD COLUMN`, safe to re-run.
+- `data/uploads/` — trend images and TV background images, served via
+  `/api/uploads/[filename]`. Upload endpoints require the admin session
+  cookie.
+
+Don't delete `data/app.db` to "reset" — use the app's Reset Session action,
+or move the file aside if you truly need a clean slate.

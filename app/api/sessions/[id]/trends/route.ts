@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { trends, sessions } from "@/lib/db/schema";
 import { eq, desc } from "drizzle-orm";
 import crypto from "crypto";
+import { broadcastToSession } from "@/lib/sse";
 
 export async function GET(
   request: Request,
@@ -21,7 +22,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id: sessionId } = await params;
-  const { name } = await request.json();
+  const { name, incrementRate, rampStages, isTakeoverTrend, color } =
+    await request.json();
 
   if (!name) {
     return Response.json({ error: "Name required" }, { status: 400 });
@@ -50,13 +52,19 @@ export async function POST(
     sessionId,
     name,
     value: 0,
+    incrementRate: incrementRate ?? 0,
     isHidden: false,
     position,
+    rampStages: rampStages ?? null,
+    isTakeoverTrend: isTakeoverTrend ?? false,
+    color: color ?? null,
   });
 
   const newTrend = await db.query.trends.findFirst({
     where: eq(trends.id, trendId),
   });
+
+  broadcastToSession(sessionId, "trendCreated", { trend: newTrend });
 
   return Response.json(newTrend);
 }

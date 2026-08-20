@@ -9,11 +9,23 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const { name } = await request.json();
+  const {
+    name,
+    visibleCount,
+    expectedDurationMinutes,
+    takeoverWindowMinutes,
+  } = await request.json();
 
   if (!name) {
     return Response.json({ error: "Name required" }, { status: 400 });
   }
+
+  const toPositiveInt = (value: unknown) => {
+    const parsed = typeof value === "string" ? parseInt(value) : value;
+    return typeof parsed === "number" && Number.isFinite(parsed) && parsed >= 0
+      ? Math.floor(parsed)
+      : null;
+  };
 
   const id = crypto.randomBytes(8).toString("hex");
   const now = Date.now();
@@ -21,10 +33,13 @@ export async function POST(request: Request) {
   await db.insert(sessions).values({
     id,
     name,
-    status: "active",
+    // Sessions are created stopped; the clock starts when an admin starts it.
+    status: "stopped",
     startedAt: now,
     createdAt: now,
-    visibleCount: 5,
+    visibleCount: toPositiveInt(visibleCount) ?? 5,
+    expectedDurationMinutes: toPositiveInt(expectedDurationMinutes),
+    takeoverWindowMinutes: toPositiveInt(takeoverWindowMinutes),
   });
 
   const session = await db.query.sessions.findFirst({
