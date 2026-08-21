@@ -1,0 +1,14 @@
+services:
+  aspier-voting:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - DATABASE_URL=/app/data/app.db
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+      - SESSION_SECRET=${SESSION_SECRET:-change-me-in-production}
+      - ADMIN_SEED_SECRET=${ADMIN_SEED_SECRET:-change-me-in-production}
+    restart: unless-stopped

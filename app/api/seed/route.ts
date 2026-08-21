@@ -3,6 +3,8 @@ import { adminUsers } from "@/lib/db/schema";
 import { hashPassword } from "@/lib/auth";
 import { eq } from "drizzle-orm";
 
+// Secret-gated admin seed/rotate endpoint for production deploys, where the
+// unauthenticated /api/admin/init convenience route isn't appropriate.
 export async function POST(request: Request) {
   const auth = request.headers.get("authorization");
   const adminSecret = process.env.ADMIN_SEED_SECRET;
@@ -11,30 +13,38 @@ export async function POST(request: Request) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { username, password } = await request.json();
+  const body = await request.json().catch(() => ({}));
+  const username = body.username || process.env.ADMIN_USERNAME || "admin";
+  const password = body.password || process.env.ADMIN_PASSWORD;
 
-  if (!username || !password) {
+  if (!password) {
     return Response.json(
-      { error: "Username and password required" },
+      { error: "Password required (body.password or ADMIN_PASSWORD env var)" },
       { status: 400 }
     );
   }
 
-  // Check if user already exists
+  const passwordHash = hashPassword(password);
+
   const existing = await db.query.adminUsers.findFirst({
     where: eq(adminUsers.username, username),
   });
 
   if (existing) {
-    return Response.json({ error: "User already exists" }, { status: 400 });
+    // Upsert — lets this endpoint double as credential rotation on redeploy,
+    // not just first-boot seeding.
+    await db
+      .update(adminUsers)
+      .set({ passwordHash })
+      .where(eq(adminUsers.username, username));
+
+    return Response.json({
+      success: true,
+      message: `Password updated for existing user ${username}`,
+    });
   }
 
-  const passwordHash = hashPassword(password);
-
-  await db.insert(adminUsers).values({
-    username,
-    passwordHash,
-  });
+  await db.insert(adminUsers).values({ username, passwordHash });
 
   return Response.json({ success: true, message: `User ${username} created` });
 }

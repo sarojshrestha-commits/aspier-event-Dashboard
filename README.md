@@ -19,17 +19,66 @@ bun install
 bun run dev
 ```
 
-Seed the admin account (defaults to `admin` / `admin123`, override with
-`ADMIN_USERNAME` / `ADMIN_PASSWORD` env vars):
+Seed the admin account. Two ways, pick one:
 
-```bash
-curl http://localhost:3000/api/admin/init
-```
+- **Local/dev** — unauthenticated, no-op if an admin already exists, uses
+  `ADMIN_USERNAME` / `ADMIN_PASSWORD` env vars (defaults to `admin` /
+  `admin123`):
+  ```bash
+  curl http://localhost:3000/api/admin/init
+  ```
+- **Production** — secret-gated, also doubles as password rotation on
+  redeploy. Requires `ADMIN_SEED_SECRET` set (see `docker-compose.yml`):
+  ```bash
+  curl -X POST http://localhost:3000/api/seed \
+    -H "Authorization: Bearer $ADMIN_SEED_SECRET" \
+    -H "Content-Type: application/json" \
+    -d '{"username":"admin","password":"your-real-password"}'
+  ```
+  Omit `username`/`password` in the body to fall back to `ADMIN_USERNAME`
+  / `ADMIN_PASSWORD`.
 
 Then:
 - `/admin` — login, create/manage sessions
 - `/admin/[sessionId]` — control panel for one session
 - `/tv/[sessionId]` — public leaderboard display, no login
+
+## Running with Docker
+
+```bash
+docker compose up --build
+```
+
+Set real credentials before going live — either export them before starting,
+or drop them in a `.env` file next to `docker-compose.yml`:
+
+```bash
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=your-real-password
+SESSION_SECRET=<random-string>
+ADMIN_SEED_SECRET=<random-string>
+```
+
+`./data` on the host is mounted to `/app/data` in the container, so the
+SQLite db and uploaded images survive rebuilds. After the container is up,
+seed the admin account with the production `/api/seed` flow above (the
+container doesn't auto-seed on boot).
+
+To rebuild after a code change: `docker compose up --build`. To stop:
+`docker compose down` — `./data` is a bind mount, not a Docker volume, so
+your db and uploads live on the host regardless and survive either way.
+
+### CI image builds
+
+`.github/workflows/docker-build.yml` builds the image on every push/PR to
+`main` and pushes it to GHCR (`ghcr.io/<owner>/<repo>`) on pushes and tags
+(PR builds verify the Dockerfile but never push). Tags produced: branch
+name, PR number, semver from `v*` git tags, short commit SHA, and `latest`
+on `main`. Pull a built image directly instead of building locally:
+
+```bash
+docker pull ghcr.io/sarojshrestha-commits/aspier-event-dashboard:latest
+```
 
 ## Features
 
