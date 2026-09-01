@@ -13,7 +13,11 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN bun run build
 
-FROM oven/bun:1 AS runner
+# Runtime deliberately uses Node, not Bun — Bun's N-API bridge has a known
+# fatal crash (`panic: NAPI FATAL ERROR: Error::New napi_get_last_error_info`)
+# when better-sqlite3's native binding is touched under load. Bun stays fine
+# for install/build above since those never open the database.
+FROM node:20-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
@@ -29,4 +33,4 @@ RUN mkdir -p /app/data/uploads
 
 EXPOSE 3000
 
-CMD ["bun", "run", "start"]
+CMD ["node", "node_modules/.bin/next", "start"]
