@@ -21,7 +21,18 @@ FROM node:20-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
+# better-sqlite3's .node binary was compiled under Bun's build environment
+# above — loading that cross-toolchain binary under a different runtime here
+# silently segfaults (no panic, no log, connection just dies). Rebuild it
+# from source against this exact Node runtime instead of trusting ABI
+# compatibility across images.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 make g++ \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /app/node_modules ./node_modules
+RUN npm rebuild better-sqlite3
+
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/package.json ./package.json
