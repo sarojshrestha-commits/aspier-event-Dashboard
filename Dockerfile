@@ -1,11 +1,11 @@
 FROM oven/bun:1 AS deps
 WORKDIR /app
-# better-sqlite3 is a native module and needs a toolchain to build from source
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 make g++ \
-    && rm -rf /var/lib/apt/lists/*
+# --ignore-scripts: Bun's bundled node-gyp targets Node headers far newer
+# than what better-sqlite3's source supports (removed V8 APIs), so letting
+# Bun run its install/build script here fails outright. The real compile
+# happens in the runner stage below, against the actual Node runtime.
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
+RUN bun install --frozen-lockfile --ignore-scripts
 
 FROM oven/bun:1 AS builder
 WORKDIR /app
@@ -21,11 +21,9 @@ FROM node:20-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
-# better-sqlite3's .node binary was compiled under Bun's build environment
-# above — loading that cross-toolchain binary under a different runtime here
-# silently segfaults (no panic, no log, connection just dies). Rebuild it
-# from source against this exact Node runtime instead of trusting ABI
-# compatibility across images.
+# better-sqlite3 was installed with --ignore-scripts above (Bun's build
+# skipped entirely), so this is the first and only real compile — against
+# this exact Node runtime's actual headers/ABI.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
